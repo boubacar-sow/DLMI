@@ -1,0 +1,14 @@
+default:
+  model:
+  # Nothing to do here, we are using the default model
+  optim:
+    optimizer: AdamW
+    scheduler: cosine
+    batch_size: 2
+    eval_batch_size: 32
+    lr_initial: 1e-3
+    lr_min: 5e-6
+    warmup_steps: 1
+    weight_decay: 0.01
+    loss: BCELoss
+    max_epochs: 40
