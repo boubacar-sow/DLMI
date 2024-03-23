@@ -7,35 +7,38 @@ import time
 import uuid
 import os
 import torch
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from pathlib import Path
 from torch.utils.data import DataLoader
 from torch.optim import Adam
-from torch.nn import BCELoss
+from torch.nn import BCELoss, BCEWithLogitsLoss
 from torch.optim.lr_scheduler import StepLR
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim import AdamW
 from torchvision import transforms
 
-from dataloader import LymphBags
-from load_dataframes import load_dataframes
+from src.dataloader import LymphBags
+from src.load_dataframes import load_dataframes
 from src.losses import *
 import sys
 import os
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.optim.lr_scheduler import ConstantLR
 
-from utils import balanced_accuracy, seed_everything, train_val_dataset
-
-def add_subfolders_to_path(folder_path):
-    for root, dirs, _ in os.walk(folder_path):
-        for dir_name in dirs:
-            full_path = os.path.join(root, dir_name)
-            sys.path.append(full_path)  # Or use sys.path.insert(0, full_path)
-# Usage:
-folder_to_add = './'
-add_subfolders_to_path(folder_to_add)
+from src.utils import balanced_accuracy, seed_everything, train_val_dataset
+import warnings
+warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+ 
+# def add_subfolders_to_path(folder_path):
+#     for root, dirs, _ in os.walk(folder_path):
+#         for dir_name in dirs:
+#             full_path = os.path.join(root, dir_name)
+#             sys.path.append(full_path)  # Or use sys.path.insert(0, full_path)
+# # Usage:
+# folder_to_add = './'
+# add_subfolders_to_path(folder_to_add)
 
 seed = 42
 seed_everything(seed)
@@ -107,7 +110,7 @@ class BaseTrainer:
         df_train_path = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/trainset/trainset_true.csv"
         df_test_path = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/testset/testset_data.csv"
         
-        df_train, df_test = load_dataframes(df_train_path, df_test_path)
+        self.df_train, self.df_test = load_dataframes(df_train_path, df_test_path)
         transforms_train = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
@@ -119,9 +122,9 @@ class BaseTrainer:
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        trainset, valset = train_val_dataset(df_train, train_dir, train_transforms=transforms_train, val_transforms=transforms_val, val_split=0.25)
-        test_indices = list(range(len(df_test)))
-        testset = LymphBags(test_dir, df_test, indices=test_indices, transforms=transforms_val,max_seq_len=198)
+        trainset, valset = train_val_dataset(self.df_train, train_dir, train_transforms=transforms_train, val_transforms=transforms_val, val_split=0.25)
+        test_indices = list(range(len(self.df_test)))
+        testset = LymphBags(test_dir, self.df_test, indices=test_indices, transforms=transforms_val,max_seq_len=198)
  
         self.train_dataset = trainset
         self.val_dataset = valset
@@ -189,6 +192,9 @@ class BaseTrainer:
         loss_name = self.config["optim"].get("loss", "BCELoss")
         if loss_name == "BCELoss":
             self.loss = lambda x, y: nn.BCELoss()(x, y)
+        else:
+            print("Loss not implemented")
+            raise NotImplementedError("Loss not implemented")
         
     def load_checkpoint(self, checkpoint_name=None):
         if checkpoint_name is None:
@@ -233,6 +239,7 @@ class BaseTrainer:
                     output = self.model(images, additional_features)
                     current_loss = self.loss(output, labels.unsqueeze(1).float())
                 if scaler is not None:
+                    self.optimizer.zero_grad()
                     scaler.scale(current_loss).backward()
                     scaler.unscale_(self.optimizer)
                     scaler.step(self.optimizer)
@@ -257,36 +264,40 @@ class BaseTrainer:
                 train_balanced_acc += balance_accuracy
                 
             train_loss = loss / (count_iter % print_every)
-            train_accuracy = 100 * train_balanced_acc / len(self.train_loader)
+            train_accuracy = train_balanced_acc / len(self.train_loader)
             
             self.model.eval()
             val_loss = 0
             val_balanced_acc = 0
             if self.device.type == "cuda":
+                import gc
+                gc.collect()
                 torch.cuda.empty_cache()
-            for images, gender, count, age, labels in tqdm(self.val_loader, desc="Validation"):
-                images, gender, count, age, labels = (images.to(self.device), 
-                    gender.to(self.device), count.to(self.device), 
-                    age.to(self.device), labels.to(self.device))  
-                additional_features = torch.cat((gender, count, age), dim=1)
-                with torch.autocast(
-                    device_type=self.device.type,
-                    enabled=self.config.get("precision", "foat32") == "float16",
-                ):
-                    output = self.model(images, additional_features)
-                    current_loss = self.loss(output, labels.unsqueeze(1).float())              
-                val_loss += current_loss.item()
-                balance_accuracy = balanced_accuracy(output, labels)
-                val_balanced_acc += balance_accuracy
+                torch.cuda.empty_cache()
+            with torch.no_grad():
+                for images, gender, count, age, labels in tqdm(self.val_loader, desc="Validation"):
+                    images, gender, count, age, labels = (images.to(self.device), 
+                        gender.to(self.device), count.to(self.device), 
+                        age.to(self.device), labels.to(self.device))  
+                    additional_features = torch.cat((gender, count, age), dim=1)
+                    with torch.autocast(
+                        device_type=self.device.type,
+                        enabled=self.config.get("precision", "foat32") == "float16",
+                    ):
+                        output = self.model(images, additional_features)
+                        current_loss = self.loss(output, labels.unsqueeze(1).float())              
+                    val_loss += current_loss.item()
+                    balance_accuracy = balanced_accuracy(output, labels)
+                    val_balanced_acc += balance_accuracy
                 
             val_loss = val_loss / len(self.val_loader)
-            val_accuracy = 100 * val_balanced_acc / len(self.val_loader)
+            val_accuracy = val_balanced_acc / len(self.val_loader)
             
             self.best_validation_loss = min(self.best_validation_loss, val_loss)
             if not self.silent:
                 print(
-                    "Epoch: {} | Time: {}s | Train Loss: {:.4f} | Train Accuracy: {:.4f} | Val Loss: {:.4f} | \
-                        Val Accuracy: {:.4f}".format(i, time2 - start_time, train_loss, train_accuracy, val_loss, val_accuracy)
+                    "Epoch: {} | Time: {}s | Train Loss: {:.4f} | Train Accuracy: {:.4f} | Val Loss: {:.4f} | Val Accuracy: {:.4f}".format(
+                        i, time2 - start_time, train_loss, train_accuracy, val_loss, val_accuracy)
                     )
             if not self.is_debug:
                 log_dict = {
@@ -336,13 +347,99 @@ class BaseTrainer:
                 if not self.silent:
                     print("checkpoint saved to: {}".format(self.save_path))
 
-                #dice_val = self.get_dice_val(load_checkpoint=False)
+                balanced_acc_val = self.get_balanced_acc_val(load_checkpoint=False)
                 if not self.is_debug:
-                    self.logger.log({"dice_val": val_accuracy/100})
+                    self.logger.log({"balanced accuracy": balanced_acc_val})
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
 
-        #dice_val = self.get_dice_val(load_checkpoint=True)
-        #if not self.is_debug:
-        #    self.logger.log({"dice_val": dice_val})
-
+        balanced_acc_val = self.get_balanced_acc_val(load_checkpoint=True)
+        if not self.is_debug:
+            self.logger.log({"balanced accuracy": balanced_acc_val})
+            
+    def load_checkpoint(self, checkpoint_name=None):
+        if checkpoint_name is None:
+            checkpoint_name = f"best_checkpoint_{self.run_name}.pt"
+        checkpoint_path = self.config["checkpoint_dir"] + f"/{checkpoint_name}"
+        self.save_path = checkpoint_path
+        self.load_model()
+        self.model.load_state_dict(
+            torch.load(checkpoint_path, map_location=self.device)["model_state_dict"]
+        )
+        self.model.eval()
+    
+    def get_balanced_acc_val(self, load_checkpoint=True):
+        if load_checkpoint:
+            self.load_checkpoint()
+        self.model.eval()
+        balanced_accuracy = self.submit_run(
+            split="val", load_checkpoint=load_checkpoint
+        )
+        
+        if not self.silent:
+            print("Balanced Accuracy Validation: ", balanced_accuracy)
+        
+        return balanced_accuracy
+    
+    def submit_run(self, split="test", load_checkpoint=True):
+        if split == "val":
+            loader = self.val_loader
+        elif split == "test":
+            loader = self.test_loader
+            try:
+                del self.val_loader
+                del self.train_loader
+                del self.val_dataset
+                del self.train_dataset
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
+            except:
+                pass
+        else:
+            raise NotImplementedError("Split not implemented")
+            
+        if load_checkpoint:
+            if not self.silent:
+                print("Loading best model...")
+            self.load_model()
+            self.model.load_state_dict(
+                torch.load(self.save_path, map_location=self.device)["model_state_dict"]
+            )
+        self.model.eval()
+        if split == "test":
+            test_predictions = []
+        outputs = []
+        all_labels = []
+        with torch.no_grad():
+            for images, gender, count, age, labels in tqdm(loader, desc="Validation" if split == "val" else "Testing"):
+                if images is not None:
+                    images, gender, count, age, labels = (images.to(self.device), 
+                        gender.to(self.device), count.to(self.device), 
+                        age.to(self.device), labels.to(self.device))  
+                    additional_features = torch.cat((gender, count, age), dim=1)
+                    with torch.autocast(
+                        device_type=self.device.type,
+                        enabled=self.config.get("precision", "foat32") == "float16",
+                    ):
+                        output = self.model(images, additional_features) 
+                        outputs.append(output)
+                        all_labels.append(labels)  
+                        preds = output.cpu().detach().numpy().squeeze()
+                        if split == "test":
+                            for pred in preds:
+                                test_predictions.append(int(pred >= 0.5))
+                else:
+                    if split == "test":
+                        test_predictions.extend([None] * gender.shape[0])
+        if split == "test":
+            test_predictions = [pred for pred in test_predictions if pred is not None]
+            sub_dict = {"Id": self.df_test.ID.values, "Predicted": test_predictions}
+            # Convert the dictionary to a DataFrame and save it as a CSV file
+            df_sub = pd.DataFrame.from_dict(sub_dict)
+            df_sub.to_csv('submission.csv', index=False)
+        
+        # compute balanced accuracy
+        outputs = torch.cat(outputs)
+        all_labels = torch.cat(all_labels)
+        balance_accuracy = balanced_accuracy(outputs, all_labels)
+        return balance_accuracy

@@ -1,4 +1,4 @@
-from models.mil_model import MILModel
+from src.models.mil_model import MILModel
 from src.trainer import BaseTrainer
 import argparse
 import os
@@ -137,8 +137,8 @@ if __name__ == "__main__":
                 + "_ft"
             )
             trainer.load(checkpoint_name=config["checkpoint_name"])
-            #trainer.train()
-            #trainer.submit_run()
+            trainer.train()
+            trainer.submit_run()
         else:
             trainer = BaseTrainer(**config, load=False)
             trainer.run_name = (
@@ -147,9 +147,9 @@ if __name__ == "__main__":
                 .replace(".pt", "")
             )
             trainer.load_checkpoint(config["checkpoint_name"])
-            #trainer.get_dice_val()
-            #trainer.submit_run()
+            trainer.get_balanced_acc_val()
+            trainer.submit_run()
     else:
         trainer = BaseTrainer(**config, load=True)
         trainer.train()
-        #trainer.submit_run()
+        trainer.submit_run()

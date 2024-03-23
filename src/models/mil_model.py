@@ -16,7 +16,7 @@ class AttentionModule(nn.Module):
         return (attention_weights * x).sum(dim=1)
 
 class MILModel(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=1):
         super().__init__()
         self.feature_extractor = resnet34(pretrained=True)
         self.feature_extractor.fc = nn.Identity()  # Remove the final FC layer
@@ -24,7 +24,7 @@ class MILModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(512 + 3, 256),  # 2048 from attention, 3 from additional features
             nn.ReLU(),
-            nn.Linear(256, 1),
+            nn.Linear(256, num_classes),
             nn.Sigmoid()
         )
 
