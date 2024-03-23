@@ -102,9 +102,12 @@ class BaseTrainer:
             )
 
     def load_train_val_test_datasets(self):
-        train_dir = self.config["train_dir"]
-        test_dir = self.config["val_dir"]
-        df_train, df_test = load_dataframes(train_dir, test_dir)
+        train_dir = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/trainset"
+        test_dir = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/testset"
+        df_train_path = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/trainset/trainset_true.csv"
+        df_test_path = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/testset/testset_data.csv"
+        
+        df_train, df_test = load_dataframes(df_train_path, df_test_path)
         transforms_train = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
