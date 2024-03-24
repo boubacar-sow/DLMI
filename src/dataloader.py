@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 
 class LymphBags(Dataset):
-    def __init__(self, bags_dir, df, indices, mode='train', transforms=None, max_seq_len=None):
+    def __init__(self, bags_dir, df, indices, mode='train', transforms=None):
         assert mode in ['train', 'test'], "mode must belong to ['train', 'test']"
         self.transforms = transforms
         self.mode = mode
@@ -14,7 +14,6 @@ class LymphBags(Dataset):
         self.dir = bags_dir
         self.bags = list(filter(lambda x: x[0] == 'P', os.listdir(bags_dir)))
         self.bags = [self.bags[i] for i in indices]
-        self.max_seq_len = max_seq_len
 
     def __len__(self):
         return len(self.bags)
@@ -30,10 +29,6 @@ class LymphBags(Dataset):
             images.append(img)
 
         images = torch.stack(images)
-
-        if len(images) < self.max_seq_len:
-            padding = torch.zeros((self.max_seq_len - len(images), 3, 224, 224))
-            images = torch.cat((images, padding), dim=0)
 
         return images
 
