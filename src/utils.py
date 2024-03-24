@@ -12,8 +12,8 @@ def train_val_dataset(df, bags_dir, train_transforms=None, val_transforms=None, 
     # if age > 65, set label to 1
     df_copy['AGE'] = df_copy['AGE'].apply(lambda x: int(x>65))
     train_idx, val_idx = train_test_split(list(range(len(df))), test_size=val_split, stratify = df_copy[['LABEL', 'GENDER', 'AGE', 'LYMPH_COUNT']])
-    train_set = LymphBags(bags_dir, df, indices = train_idx, transforms=train_transforms,max_seq_len=198)
-    val_set = LymphBags(bags_dir, df, indices = val_idx, transforms=val_transforms,max_seq_len=198)
+    train_set = LymphBags(bags_dir, df, indices = train_idx, transforms=train_transforms)
+    val_set = LymphBags(bags_dir, df, indices = val_idx, transforms=val_transforms)
     return train_set, val_set
 
 def balanced_accuracy(outputs, labels):
