@@ -13,7 +13,7 @@ pretrained_settings = {
             'input_range': [0, 1],
             'mean': [0.485, 0.456, 0.406],
             'std': [0.229, 0.224, 0.225],
-            'num_classes': 1000
+            'num_classes': 1
         }
     },
     'se_resnext50_32x4d': {
@@ -24,7 +24,7 @@ pretrained_settings = {
             'input_range': [0, 1],
             'mean': [0.485, 0.456, 0.406],
             'std': [0.229, 0.224, 0.225],
-            'num_classes': 1000
+            'num_classes': 1
         }
     },
 }
@@ -155,7 +155,9 @@ class SENet(nn.Module):
         num_classes (int): Number of outputs in `last_linear` layer.
         """
         super(SENet, self).__init__()
+        block = SEResNetBottleneck
         self.inplanes = inplanes
+        self.num_classes=num_classes
         if input_3x3:
             layer0_modules = [
                 ('conv1', nn.Conv2d(3, 64, 3, stride=2, padding=1,
@@ -222,9 +224,9 @@ class SENet(nn.Module):
             downsample_kernel_size=downsample_kernel_size,
             downsample_padding=downsample_padding
         )
-        self.avg_pool = nn.AvgPool2d(7, stride=1)
+        self.avg_pool = nn.AvgPool2d(4, stride=1)
         self.dropout = nn.Dropout(dropout_p) if dropout_p is not None else None
-        self.last_linear = nn.Linear(512 * block.expansion, num_classes)
+        self.last_linear = nn.Linear(512 * block.expansion, 1000)
 
     def _make_layer(self, block, planes, blocks, groups, reduction, stride=1,
                     downsample_kernel_size=1, downsample_padding=0):
@@ -255,7 +257,7 @@ class SENet(nn.Module):
         return x
 
     def logits(self, x, lymph_count):
-        x = self.avg_pool(x)
+        #x = self.avg_pool(x)
         if self.dropout is not None:
             x = self.dropout(x)
         x = x.view(x.size(0), -1)
@@ -265,15 +267,24 @@ class SENet(nn.Module):
         return x
 
     def forward(self, x, lymph_count):
-        x = self.features(x)
+        batch_size, num_images, c, h, w = x.size()
+        x = x.view(batch_size * num_images, c, h, w)  # reshape x to (batch_size * num_images, c, h, w)
+        x = self.features(x)  # extract features from each image
+        x = self.avg_pool(x)  # apply avg_pool to each image
+        x = x.view(batch_size, num_images, -1)  # reshape x back to (batch_size, num_images, ...)
+        x = torch.mean(x, dim=1)  # take the mean of the features of all images in each bag
         x = self.logits(x, lymph_count)
-        return torch.sigmoid(x)
+        return x #torch.sigmoid(x)
+
+
 
 def initialize_pretrained_model(model, num_classes, settings):
     assert num_classes == settings['num_classes'], \
         'num_classes should be {}, but is {}'.format(
             settings['num_classes'], num_classes)
-    model.load_state_dict(model_zoo.load_url(settings['url']))
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
+    model.load_state_dict(model_zoo.load_url(settings['url'], check_hash=False))
     model.input_space = settings['input_space']
     model.input_size = settings['input_size']
     model.input_range = settings['input_range']

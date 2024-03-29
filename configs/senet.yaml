@@ -1,0 +1,23 @@
+default:
+  model:
+    num_classes: 1   
+    block: SEResNetBottleneck
+    layers: [3, 4, 6, 3]
+    groups: 1
+    reduction: 16
+    dropout_p: null
+    inplanes: 64
+    input_3x3: false
+    downsample_kernel_size: 1
+    downsample_padding: 0
+  optim:
+    optimizer: AdamW
+    scheduler: cosine
+    batch_size: 4
+    eval_batch_size: 2
+    lr_initial: 1e-3
+    lr_min: 5e-6
+    warmup_steps: 1
+    weight_decay: 0.01
+    loss: BCELoss
+    max_epochs: 15

@@ -1,4 +1,6 @@
 from src.models.mil_model import MILModel
+from src.models.senet import *
+from src.models.attentionDeepMil import *
 from src.trainer import BaseTrainer
 import argparse
 import os
@@ -7,6 +9,8 @@ from pathlib import Path
 
 MODELS_DICT = { 
     'mil_model': MILModel,  
+    'senet': SENet,
+    'attentionDeepMil': Attention,
 }
 
 if __name__ == "__main__":
@@ -15,7 +19,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="baseline",
+        default="mil_model",
         help="path to the config file",
     )
 
@@ -37,6 +41,31 @@ if __name__ == "__main__":
         default="float16",
         help="precision to use for training",
     )
+    
+    parser.add_argument(
+        "--train_dir",
+        type=str,
+        default="/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/trainset",
+        help="path to the training directory",
+    )
+    parser.add_argument(
+        "--test_dir",
+        type=str,
+        default="/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/testset",
+        help="path to the test directory",
+    )
+    parser.add_argument(
+        "--df_train_path",
+        type=str,
+        default="/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/trainset/trainset_true.csv",
+        help="path to the training dataframe",
+    )
+    parser.add_argument(
+        "--df_test_path",
+        type=str,
+        default="/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/testset/testset_data.csv",
+        help="path to the test dataframe",
+    )
 
     parser.add_argument("--seed", type=int, default=42, help="random seed")
 
@@ -55,7 +84,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb_project",
         type=str,
-        default="Geosciences segmentation",
+        default="DLMI project",
         help="name of the wandb project for logs",
     )
 

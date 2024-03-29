@@ -7,6 +7,7 @@ import time
 import uuid
 import os
 import torch
+import torchvision
 from tqdm.notebook import tqdm
 from pathlib import Path
 from torch.utils.data import DataLoader
@@ -20,6 +21,7 @@ from torchvision import transforms
 
 from src.dataloader import LymphBags
 from src.load_dataframes import load_dataframes
+from src.models.senet import *
 from src.losses import *
 import sys
 import os
@@ -46,7 +48,7 @@ seed_everything(seed)
 class BaseTrainer:
     def __init__(self, load=True, **kwargs):
         run_dir = kwargs.get('run_dir', './runs')
-        model = kwargs.get('model_object', 'BaselineModel')
+        model = kwargs.get('model_object', 'MILModel')
 
         self.config = {
             **kwargs,
@@ -105,26 +107,30 @@ class BaseTrainer:
             )
 
     def load_train_val_test_datasets(self):
-        train_dir = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/trainset"
-        test_dir = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/testset"
-        df_train_path = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/trainset/trainset_true.csv"
-        df_test_path = "/kaggle/input/dlmi-lymphocytosis/dlmi-lymphocytosis-classification/testset/testset_data.csv"
+        train_dir = self.config['train_dir']
+        test_dir = self.config['test_dir']
+        df_train_path = self.config['df_train_path']
+        df_test_path = self.config['df_test_path']
         
         self.df_train, self.df_test = load_dataframes(df_train_path, df_test_path)
+        img_size = 128   ## original 224
         transforms_train = transforms.Compose([
-            transforms.Resize((224, 224)),
+            #torchvision.transforms.ToPILImage(),
+            #transforms.Resize((img_size,img_size)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomVerticalFlip(p=0.5),
+            #transforms.RandomRotation(30, fill=None),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
-        transforms_val = transforms.Compose([
-            transforms.Resize((224, 224)),
+        transforms_test = transforms.Compose([
+            #torchvision.transforms.ToPILImage(),
+            #transforms.Resize((img_size,img_size)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        trainset, valset = train_val_dataset(self.df_train, train_dir, train_transforms=transforms_train, val_transforms=transforms_val, val_split=0.25)
+        trainset, valset = train_val_dataset(self.df_train, train_dir, train_transforms=transforms_train, val_transforms=transforms_train, val_split=0.25)
         test_indices = list(range(len(self.df_test)))
-        testset = LymphBags(test_dir, self.df_test, indices=test_indices, transforms=transforms_val,max_seq_len=198)
+        testset = LymphBags(test_dir, self.df_test, indices=test_indices, transforms=transforms_test)
  
         self.train_dataset = trainset
         self.val_dataset = valset
@@ -136,16 +142,34 @@ class BaseTrainer:
         
         num_workers = self.config["optim"].get("num_workers", 2)
 
-        self.val_loader = DataLoader(
-            self.val_dataset, batch_size=eval_batch_size, shuffle=True, num_workers=num_workers, pin_memory=False
-        )
+        from torch.nn.utils.rnn import pad_sequence
+
+        def collate_fn(batch):
+            # Separate the sequences and the labels
+            sequences, genders, counts, ages, labels = zip(*batch)
+
+            # Pad the sequences
+            sequences = pad_sequence(sequences, batch_first=True)
+
+            # Stack the other attributes and labels
+            genders = torch.stack(genders)
+            counts = torch.stack(counts)
+            ages = torch.stack(ages)
+            labels = torch.tensor(labels, dtype=torch.float32)
+
+            return sequences, genders, counts, ages, labels
+
+        # Then, when you create the DataLoader, pass the collate_fn:
         self.train_loader = DataLoader(
-            self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=False
+            self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=False, collate_fn=collate_fn
+        )
+        self.val_loader = DataLoader(
+            self.val_dataset, batch_size=eval_batch_size, shuffle=True, num_workers=num_workers, pin_memory=False, collate_fn=collate_fn
         )
         self.test_loader = DataLoader(
-            self.test_dataset, batch_size=eval_batch_size, shuffle=False, num_workers=num_workers, pin_memory=False
+            self.test_dataset, batch_size=eval_batch_size, shuffle=False, num_workers=num_workers, pin_memory=False, collate_fn=collate_fn
         )
-    
+
     def load_model(self):
         loader = list(self.loaders.values())[0] if self.loaders else None
         if loader:
@@ -158,9 +182,16 @@ class BaseTrainer:
         }
 
         # Extract model class from name
-        print(self.config)
         self.model = self.config["model_object"](**model_config).to(self.device)
-
+        
+        if self.model.__class__.__name__ == "SENet":
+            self.model.last_linear = nn.Linear(2048, 1)
+            self.model.block = SEResNetBottleneck
+            print("Loading pretrained model")
+            print(self.model.block.expansion)
+            settings = pretrained_settings['se_resnet50']["imagenet"]
+            initialize_pretrained_model(self.model, self.model.num_classes, settings)
+            
     def load_optimizer(self):
         optimizer = self.config["optim"].get("optimizer", "AdamW")
 
@@ -189,12 +220,12 @@ class BaseTrainer:
     def load_loss(self):
         print(self.config["model_object"])
         #print(prediction.shape)
-        loss_name = self.config["optim"].get("loss", "BCELoss")
+        loss_name = self.config["optim"].get("loss", "BCEWithLogitsLoss")
         if loss_name == "BCELoss":
-            self.loss = lambda x, y: nn.BCELoss()(x, y)
+            self.loss = lambda x, y: nn.BCEWithLogitsLoss()(x, y)
         else:
-            print("Loss not implemented")
-            raise NotImplementedError("Loss not implemented")
+            print("Loss not implemented, using default loss BCEWithLogitsLoss")
+            self.loss = lambda x, y: nn.BCEWithLogitsLoss()(x, y)
         
     def load_checkpoint(self, checkpoint_name=None):
         if checkpoint_name is None:
@@ -208,36 +239,39 @@ class BaseTrainer:
         self.model.eval()
 
     def train(self):
+        self.best_validation_loss = np.inf
         for i in tqdm(range(self.epoch, self.config["optim"]["max_epochs"])):
             if not self.silent:
                 print("-----EPOCH{}-----".format(i + 1))
             self.epoch = i
             self.model.train()
             start_time = time.time()
-            print_every = self.config.get("print_every", 20)
             count_iter = 0
             train_balanced_acc = 0
-            self.best_validation_loss = np.inf
             loss = 0
             for images, gender, count, age, labels in tqdm(self.train_loader, desc="Training"):
                 images, gender, count, age, labels = (images.to(self.device), 
                     gender.to(self.device), count.to(self.device), 
                     age.to(self.device), labels.to(self.device))  
                 additional_features = torch.cat((gender, count, age), dim=1)
-                
+
                 if self.device.type != "cuda":
                     scaler = None
                     dtype = torch.bfloat16
                 else:
                     scaler = torch.cuda.amp.GradScaler()
                     dtype = torch.float16
-                
+
                 with torch.autocast(
                     device_type=self.device.type,
                     enabled=self.config.get("precision", "float32") == "float16",
                 ):
-                    output = self.model(images, additional_features)
-                    current_loss = self.loss(output, labels.unsqueeze(1).float())
+                    if self.model.__class__.__name__ == "SENet":
+                            output = self.model(images, count)
+                            current_loss = self.loss(output, labels.unsqueeze(1).float())
+                    else:   
+                        output = self.model(images, additional_features)
+                        current_loss = self.loss(output, labels.unsqueeze(1).float())  
                 if scaler is not None:
                     self.optimizer.zero_grad()
                     scaler.scale(current_loss).backward()
@@ -256,14 +290,10 @@ class BaseTrainer:
                 loss += current_loss.item()
 
                 count_iter += 1
-                if count_iter % print_every == 0:
-                    time2 = time.time()
-                    self.losses.append(loss)
-                    loss = 0
-                balance_accuracy = balanced_accuracy(output, labels)
+                balance_accuracy = balanced_accuracy(torch.sigmoid(output), labels)
                 train_balanced_acc += balance_accuracy
-                
-            train_loss = loss / (count_iter % print_every)
+
+            train_loss = loss / count_iter
             train_accuracy = train_balanced_acc / len(self.train_loader)
             
             self.model.eval()
@@ -284,20 +314,24 @@ class BaseTrainer:
                         device_type=self.device.type,
                         enabled=self.config.get("precision", "foat32") == "float16",
                     ):
-                        output = self.model(images, additional_features)
-                        current_loss = self.loss(output, labels.unsqueeze(1).float())              
+                        if self.model.__class__.__name__ == "SENet":
+                            output = self.model(images, count)
+                            current_loss = self.loss(output, labels.unsqueeze(1).float())
+                        else:   
+                            output = self.model(images, additional_features)
+                            current_loss = self.loss(output, labels.unsqueeze(1).float())              
                     val_loss += current_loss.item()
-                    balance_accuracy = balanced_accuracy(output, labels)
+                    balance_accuracy = balanced_accuracy(torch.sigmoid(output), labels)
                     val_balanced_acc += balance_accuracy
                 
             val_loss = val_loss / len(self.val_loader)
             val_accuracy = val_balanced_acc / len(self.val_loader)
-            
+            time2 = time.time()
             self.best_validation_loss = min(self.best_validation_loss, val_loss)
             if not self.silent:
                 print(
                     "Epoch: {} | Time: {}s | Train Loss: {:.4f} | Train Accuracy: {:.4f} | Val Loss: {:.4f} | Val Accuracy: {:.4f}".format(
-                        i, time2 - start_time, train_loss, train_accuracy, val_loss, val_accuracy)
+                    i, time2 - start_time, train_loss, train_accuracy, val_loss, val_accuracy)
                     )
             if not self.is_debug:
                 log_dict = {
@@ -367,7 +401,7 @@ class BaseTrainer:
             torch.load(checkpoint_path, map_location=self.device)["model_state_dict"]
         )
         self.model.eval()
-    
+
     def get_balanced_acc_val(self, load_checkpoint=True):
         if load_checkpoint:
             self.load_checkpoint()
@@ -375,12 +409,12 @@ class BaseTrainer:
         balanced_accuracy = self.submit_run(
             split="val", load_checkpoint=load_checkpoint
         )
-        
+
         if not self.silent:
             print("Balanced Accuracy Validation: ", balanced_accuracy)
-        
+
         return balanced_accuracy
-    
+
     def submit_run(self, split="test", load_checkpoint=True):
         if split == "val":
             loader = self.val_loader
@@ -397,7 +431,7 @@ class BaseTrainer:
                 pass
         else:
             raise NotImplementedError("Split not implemented")
-            
+
         if load_checkpoint:
             if not self.silent:
                 print("Loading best model...")
@@ -421,7 +455,11 @@ class BaseTrainer:
                         device_type=self.device.type,
                         enabled=self.config.get("precision", "foat32") == "float16",
                     ):
-                        output = self.model(images, additional_features) 
+                        if self.model.__class__.__name__ == "SENet":
+                            output = self.model(images, count)
+                        else:   
+                            output = self.model(images, additional_features)
+                            output = torch.sigmoid(output)
                         outputs.append(output)
                         all_labels.append(labels)  
                         preds = output.cpu().detach().numpy().squeeze()
@@ -437,7 +475,7 @@ class BaseTrainer:
             # Convert the dictionary to a DataFrame and save it as a CSV file
             df_sub = pd.DataFrame.from_dict(sub_dict)
             df_sub.to_csv('submission.csv', index=False)
-        
+
         # compute balanced accuracy
         outputs = torch.cat(outputs)
         all_labels = torch.cat(all_labels)
